@@ -1,3 +1,5 @@
+import yfinance as yf
+from io import StringIO
 import streamlit as st
 import pandas as pd
 import requests
@@ -25,13 +27,13 @@ def fetch_data():
     html = response.text
 
     # Read ALL tables
-    tables = pd.read_html(html)
+    tables = pd.read_html(StringIO(html))
 
     # Find the correct table (the one with many rows)
     df = max(tables, key=lambda x: len(x))
 
     # Rename columns (adjust if needed)
-    df.columns = ["Date", "3m", "1y", "2y", "3y", "4y", "5y"]
+    df.columns = ["Date", "5y", "4y", "3y", "2y", "1y", "3m"]
 
     # Clean date column
     df["Date"] = (
@@ -64,6 +66,37 @@ def fetch_data():
     return df.sort_values("Date")
 
 
+@st.cache_data
+def fetch_fund_data():
+    tickers = {
+        "Bas 75 A": ["0P00009H3K.ST", "0P00009H3K"],
+        "Bas 100 A": ["0P00013YB6.ST", "0P00013YB6"],
+    }
+
+    all_data = []
+
+    for name, ticker_list in tickers.items():
+        df = pd.DataFrame()
+
+        for ticker_symbol in ticker_list:
+            ticker = yf.Ticker(ticker_symbol)
+            df = ticker.history(period="max")
+
+            if not df.empty:
+                break
+
+        if not df.empty:
+            df = df.reset_index()
+            df["Date"] = df["Date"].dt.tz_localize(None)
+            df = df.rename(columns={"Close": "Price"})
+            df["Fund"] = name
+            all_data.append(df)
+
+    if all_data:
+        return pd.concat(all_data)
+
+    return pd.DataFrame()
+
 # -------------------------
 # REFRESH BUTTON
 # -------------------------
@@ -94,12 +127,67 @@ mask = (df["Date"] >= date_range[0]) & (df["Date"] <= date_range[1])
 df_filtered = df.loc[mask]
 
 # Select rate types
-rate_columns = df.columns[1:]
+rate_columns = ["3m", "1y", "2y", "3y", "4y", "5y"]
 selected_rates = st.sidebar.multiselect(
     "Select interest rates",
     rate_columns,
     default=list(rate_columns[:3]),
 )
+
+selected_funds = st.sidebar.multiselect(
+    "Select funds",
+    ["Bas 75 A", "Bas 100 A"],
+    default=["Bas 75 A", "Bas 100 A"],
+)
+
+fund_df = fetch_fund_data()
+
+fund_filtered = fund_df[
+    (fund_df["Date"] >= pd.to_datetime(date_range[0])) &
+    (fund_df["Date"] <= pd.to_datetime(date_range[1])) &
+    (fund_df["Fund"].isin(selected_funds))
+]
+
+st.subheader("📊 Swedbank Robur Funds")
+
+if fund_filtered.empty:
+    st.warning("⚠️ Could not fetch fund data automatically.")
+
+else:
+    fig2 = px.line(
+        fund_filtered,
+        x="Date",
+        y="Price",
+        color="Fund",  # 🔥 KEY: separates the two lines
+    )
+
+    fig2.update_traces(line=dict(width=3))
+
+    fig2.update_layout(
+        template="plotly_white",
+        title={
+            "text": "Fund Value Over Time",
+            "x": 0.02,
+            "xanchor": "left",
+            "font": dict(size=22)
+        },
+        xaxis=dict(showgrid=False),
+        yaxis=dict(
+            title="Price",
+            gridcolor="rgba(0,0,0,0.05)"
+        ),
+        legend=dict(
+            orientation="h",
+            y=1.08,
+            x=0,
+            xanchor="left",
+            bgcolor="rgba(255,255,255,0.6)"
+        ),
+        hovermode="x unified",
+        margin=dict(l=40, r=40, t=60, b=40),
+    )
+
+    st.plotly_chart(fig2, width="stretch")
 
 # -------------------------
 # PLOT
@@ -148,12 +236,11 @@ if selected_rates:
         ),
 
         legend=dict(
-            title="",
             orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
+            y=1.08,
+            x=0,
+            xanchor="left",
+            bgcolor="rgba(255,255,255,0.6)"
         ),
 
         hovermode="x unified",
@@ -167,11 +254,11 @@ if selected_rates:
         hovertemplate="%{y:.2f}%<extra>%{fullData.name}</extra>"
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 else:
     st.warning("Select at least one rate type.")
-    
+
 # -------------------------
 # DATA TABLE
 # -------------------------
